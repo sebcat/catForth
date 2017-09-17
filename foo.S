@@ -21,7 +21,10 @@
 */
 
 /* ITC Forth for FreeBSD/amd64. Should be easy to adapt to 32-bit x86 or
- * Linux but no care is taken to do so. */
+ * Linux but no care is taken to do so.
+ *
+ * Tabs are assumed to be four spaces wide.
+ */
 
 .intel_syntax noprefix
 
@@ -107,47 +110,34 @@ PFA_\label:
 .text
 .global _start
 _start:
-    /* Setup the VM registers and start the interpreter. */
+	/* Setup the VM registers and start the interpreter. */
 	cld
-FOO:
 	movabs		REG_RSP, offset RSTACK + RSTACK_SIZE
 	movabs		REG_IP, offset PFA_QUIT
 	NEXT
 
+/* ENTER: thread interpreter, used as a CFA for high-level words */
 ENTER:
 	PUSHRSP	REG_IP
 	add		REG_W, offset CELLSIZE
 	mov		REG_IP, REG_W
 	NEXT
 
-	DEFCODE "EXIT",4,EXIT
-	POPRSP	REG_IP
-	NEXT
-
-	/* ( -- n ) */
-	DEFCODE "LIT",3,LIT
-	lodsq
-	push	REG_W
-	NEXT
-
-    /* ( n -- ) */
-	DEFCODE "SC_EXIT",7,SC_EXIT
-	pop		rdi
-	mov		eax, SYS_exit
-	syscall
-
-	/* ( -- n) - read input to the input buffer, return number of bytes
-     *           read, 0 on EOF and -1 on failure */
-	DEFCODE "RIBUF",5,RIBUF
+/* _RIBUF: read bytes to the input buffer.
+ *   Returns the number of bytes read, 0 on EOF and -1 on failure.
+ *   r9 is used as the return register to avoid conflict with REG_W */
+_RIBUF:
 	push	REG_W
 	push	REG_IP
 	push	REG_RSP
+	push	rdx
+	push	rcx
 
 	sub		rsp, 32 /* struct iovec iov[2] */
 	mov		edx, 1  /* iovcnt */
 	mov		ecx, [ibuf_curroff]
 
-    /* iov[0].iov_base */
+	/* iov[0].iov_base */
 	mov		r9, offset ibuf_buf
 	add		r9, rcx
 	mov		[rsp], r9
@@ -179,15 +169,52 @@ ENTER:
 2:
 	mov		r9, rax
 	add		rsp, 32
+
+	pop		rcx
+	pop		rdx
 	pop		REG_RSP
 	pop		REG_IP
 	pop		REG_W
-	push	r9
+	ret
+
+	DEFCODE "EXIT",4,EXIT
+	POPRSP	REG_IP
+	NEXT
+
+	/* ( -- n ) */
+	DEFCODE "LIT",3,LIT
+	lodsq
+	push	REG_W
+	NEXT
+
+	/* ( n -- ) */
+	DEFCODE "SC_EXIT",7,SC_EXIT
+	pop		rdi
+	mov		eax, SYS_exit
+	syscall
+
+	/* ( -- n ) */
+	DEFCODE "KEY",3,KEY
+	mov		ecx, [ibuf_curroff]
+	mov		r9d, [ibuf_endoff]
+	cmp		ecx, r9d
+	jne		1f
+	call	_RIBUF
+	test	r9, r9
+	jg		1f
+	push	-1
+	NEXT
+1:
+	mov		edx, offset ibuf_buf
+	movzx	edi, byte ptr [edx + ecx]
+	inc		ecx
+	and		ecx, offset IBUF_LEN-1
+	mov		[ibuf_curroff], ecx
+	push	rdi
 	NEXT
 
 	DEFWORD "BYE",3,BYE
-	C_CELL	RIBUF
-	C_CELL	RIBUF
+	C_CELL	KEY
 	C_CELL	SC_EXIT
 
 	/* QUIT should reset the return stack and enter interpretation state.
