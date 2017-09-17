@@ -12,5 +12,5 @@ foo.o: foo.S
 foo: foo.o foo.ld
 	$(LD) -T foo.ld -o foo foo.o
 
-clean: foo.o foo
+clean:
 	$(RM) foo.o foo

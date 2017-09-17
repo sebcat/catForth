@@ -44,7 +44,10 @@
 
 /* syscall numbers */
 .set SYS_exit,1
+.set SYS_write,4
 .set SYS_readv,120
+
+.set STDOUT_FILENO,1
 
 /* load the next cell from IP into W and jump to the address W points to */
 .macro NEXT
@@ -107,6 +110,8 @@ PFA_\label:
 .lcomm		ibuf_curroff, 4
 .lcomm		ibuf_endoff, 4
 
+.lcomm		wordbuf,256
+
 .text
 .global _start
 _start:
@@ -162,6 +167,7 @@ _RIBUF:
 	/* update ibuf_endoff */
 	test	rax, rax
 	jle		2f
+	mov		ecx, [ibuf_curroff] /* ecx possibly syscall tainted, so re-read */
 	add		rcx, rax
 	and		ecx, offset IBUF_LEN-1
 	mov		[ibuf_endoff], ecx
@@ -213,8 +219,195 @@ _RIBUF:
 	push	rdi
 	NEXT
 
-	DEFWORD "BYE",3,BYE
+	/* ( x -- x x ) */
+	DEFCODE	"DUP",3,DUP
+	pop		r9
+	push	r9
+	push	r9
+	NEXT
+
+	DEFCODE	"OVER",4,OVER
+	mov		rdx, [rsp+8]
+	push	rdx
+	NEXT
+
+	DEFCODE	"DROP",4,DROP
+	pop		r9
+	NEXT
+
+	DEFCODE	"BRANCH",6,BRANCH
+	add		REG_IP, [REG_IP]
+	NEXT
+
+	/* ( n -- ) */
+	DEFCODE	"0BRANCH",7,ZBRANCH
+	pop		r9
+	test	r9,r9
+	jz		PFA_BRANCH
+	lodsq
+	NEXT
+
+	/* ( x1 x2 - flag ) */
+	DEFCODE	"=",1,EQUALS
+	pop		rcx
+	pop		r9
+	xor		rdi, rdi
+	xor		rdx, rdx
+	inc		rdx
+	cmp		rcx, r9
+	cmovz	rdi, rdx
+	push	rdi
+	NEXT
+
+	/* ( x1 x2 -- flag ) */
+	DEFCODE "<>",2,NOT_EQUALS
+	pop		rcx
+	pop		r9
+	xor		rdi, rdi
+	xor		rdx, rdx
+	inc		rdx
+	cmp		rcx, r9
+	cmovnz	rdi, rdx
+	push	rdi
+	NEXT
+
+	/* ( c addr -- ) */
+	DEFCODE "C!",2,C_STORE
+	pop		rdi
+	pop		rcx
+	mov		[rdi], cl
+	NEXT
+
+	/* ( char addr -- addr+1 ) */
+	DEFCODE "C!+",3,C_STORE_ADD
+	pop		rdi
+	pop		rcx
+	mov		[rdi], cl
+	inc		rdi
+	push	rdi
+	NEXT
+
+	/* ( addr -- addr+1 u ) */
+	DEFCODE	"C@+",3,C_FETCH_ADD
+	pop		rdi
+	movzx	rcx, byte ptr [rdi]
+	inc		rdi
+	push	rdi
+	push	rcx
+	NEXT
+
+	/* ( x -- ) */
+	DEFCODE ">R",2,TO_R
+	pop		rcx
+	PUSHRSP	rcx
+	NEXT
+
+	/* ( -- x ) */
+	DEFCODE "R>",2,R_FROM
+	POPRSP	rcx
+	push	rcx
+	NEXT
+
+	/* ( -- x ) */
+	DEFCODE	"R@",2, R_FETCH
+	mov		rcx, [REG_RSP]
+	push	rcx
+	NEXT
+
+	/* ( n1 n2 - n ) */
+	DEFCODE "-",1,SUB
+	pop		rcx
+	pop		rdx
+	sub		rdx, rcx
+	push	rdx
+	NEXT
+
+	/* ( c-addr u -- ) */
+	DEFCODE "TYPE",4,TYPE
+	pop		rdx
+	pop		r9
+	push	REG_W
+	push	REG_IP
+	push	REG_RSP
+
+	/* XXX: This does not handle partial writes right now */
+	mov		eax, SYS_write
+	mov		rsi, r9
+	mov		rdi, STDOUT_FILENO
+	syscall
+
+	pop		REG_RSP
+	pop		REG_IP
+	pop		REG_W
+	NEXT
+
+	DEFWORD "2OVER",5,TWO_OVER
+	C_CELL	OVER
+	C_CELL	OVER
+	C_CELL	EXIT
+
+	DEFWORD "2DROP",5,TWO_DROP
+	C_CELL	DROP
+	C_CELL	DROP
+	C_CELL	EXIT
+
+	/* ( char "<chars>ccc<char>" -- c-addr ) */
+	DEFWORD "WORD",4,WORD
 	C_CELL	KEY
+	/* TODO: check return value of KEY for EOF and error and call BYE, or
+	 *       have KEY call BYE */
+	C_CELL	TWO_OVER
+	C_CELL	EQUALS
+	C_CELL	ZBRANCH
+	C_CELL	2f-.
+	C_CELL	DROP
+	C_CELL	BRANCH
+	C_CELL	PFA_WORD-.
+2:
+	/* S: delim key */
+	C_CELL	LIT
+	C_CELL	wordbuf+1
+	C_CELL	C_STORE_ADD
+	C_CELL	TO_R
+3:
+	/* S: delim */
+	C_CELL	KEY
+	C_CELL	TWO_OVER
+	C_CELL	NOT_EQUALS
+	C_CELL	ZBRANCH
+	C_CELL	4f-.
+	C_CELL	R_FROM
+	C_CELL	C_STORE_ADD /* XXX: There's a potential overflow here */
+	C_CELL	TO_R
+	C_CELL	BRANCH
+	C_CELL	3b-.
+4:
+	C_CELL	TWO_DROP
+	C_CELL	R_FROM
+	C_CELL	LIT
+	C_CELL	wordbuf+1
+	C_CELL	SUB
+	C_CELL	LIT
+	C_CELL	wordbuf
+	C_CELL	C_STORE
+	C_CELL	LIT
+	C_CELL	wordbuf
+	C_CELL	EXIT
+
+	/* ( c-addr - c-addr+1 u ) */
+	DEFWORD "COUNT",5,COUNT
+	C_CELL	C_FETCH_ADD
+	C_CELL	EXIT
+
+	DEFWORD "BYE",3,BYE
+	C_CELL	LIT
+	C_CELL	15
+	C_CELL	LIT
+	C_CELL	' '
+1:
+	C_CELL	WORD
+	C_CELL	COUNT
+	C_CELL	TYPE
 	C_CELL	SC_EXIT
 
 	/* QUIT should reset the return stack and enter interpretation state.
