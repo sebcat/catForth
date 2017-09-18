@@ -351,6 +351,11 @@ _RIBUF:
 	C_CELL	DROP
 	C_CELL	EXIT
 
+	DEFWORD "0",1,ZERO
+	C_CELL	LIT
+	C_CELL	0
+	C_CELL	EXIT
+
 	/* ( char "<chars>ccc<char>" -- c-addr ) */
 	DEFWORD "WORD",4,WORD
 	C_CELL	KEY
@@ -400,18 +405,19 @@ _RIBUF:
 	C_CELL	EXIT
 
 	DEFWORD "BYE",3,BYE
+	C_CELL	ZERO
+	C_CELL	SC_EXIT
+
+	/* QUIT should reset the return stack and enter interpretation state.
+	 * Right now it's used as an entry point for debugger oriented programming
+     */
+	DEFWORD "QUIT",4,QUIT
 	C_CELL	LIT
-	C_CELL	15
+	C_CELL	15 /* exit code, for testing stack alignment at SC_EXIT */
 	C_CELL	LIT
 	C_CELL	' '
-1:
 	C_CELL	WORD
 	C_CELL	COUNT
 	C_CELL	TYPE
 	C_CELL	SC_EXIT
-
-	/* QUIT should reset the return stack and enter interpretation state.
-	 * Right now it just calls the exit syscall */
-	DEFWORD "QUIT",4,QUIT
-	C_CELL	BYE
 
