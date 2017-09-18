@@ -341,6 +341,25 @@ _RIBUF:
 	pop		REG_W
 	NEXT
 
+	/* ( c -- flag ) */
+	DEFCODE "WS?",3,IS_WS
+	xor		rcx, rcx
+	pop		rdx
+	cmp		dl, ' '
+	je		1f
+	cmp		dl, '\r'
+	je		1f
+	cmp		dl, '\n'
+	je		1f
+	cmp		dl, '\t'
+	je		1f
+	push	rcx
+	NEXT
+1:
+	inc		rcx
+	push	rcx
+	NEXT
+
 	DEFWORD "2OVER",5,TWO_OVER
 	C_CELL	OVER
 	C_CELL	OVER
@@ -356,29 +375,32 @@ _RIBUF:
 	C_CELL	0
 	C_CELL	EXIT
 
-	/* ( char "<chars>ccc<char>" -- c-addr ) */
-	DEFWORD "WORD",4,WORD
+	/* ( "<wss>ccc<ws>" -- c-addr ) */
+	/* non-standard WORD implementation */
+	DEFWORD "catWORD",4,catWORD
 	C_CELL	KEY
 	/* TODO: check return value of KEY for EOF and error and call BYE, or
 	 *       have KEY call BYE */
-	C_CELL	TWO_OVER
-	C_CELL	EQUALS
+	C_CELL	DUP
+	C_CELL	IS_WS
 	C_CELL	ZBRANCH
 	C_CELL	2f-.
 	C_CELL	DROP
 	C_CELL	BRANCH
-	C_CELL	PFA_WORD-.
+	C_CELL	PFA_catWORD-.
 2:
-	/* S: delim key */
+	/* S: key */
 	C_CELL	LIT
 	C_CELL	wordbuf+1
 	C_CELL	C_STORE_ADD
 	C_CELL	TO_R
 3:
-	/* S: delim */
+	/* S: */
 	C_CELL	KEY
-	C_CELL	TWO_OVER
-	C_CELL	NOT_EQUALS
+	C_CELL	DUP
+	C_CELL	IS_WS
+	C_CELL	ZERO
+	C_CELL	EQUALS
 	C_CELL	ZBRANCH
 	C_CELL	4f-.
 	C_CELL	R_FROM
@@ -387,7 +409,7 @@ _RIBUF:
 	C_CELL	BRANCH
 	C_CELL	3b-.
 4:
-	C_CELL	TWO_DROP
+	C_CELL	DROP
 	C_CELL	R_FROM
 	C_CELL	LIT
 	C_CELL	wordbuf+1
@@ -414,9 +436,7 @@ _RIBUF:
 	DEFWORD "QUIT",4,QUIT
 	C_CELL	LIT
 	C_CELL	15 /* exit code, for testing stack alignment at SC_EXIT */
-	C_CELL	LIT
-	C_CELL	' '
-	C_CELL	WORD
+	C_CELL	catWORD
 	C_CELL	COUNT
 	C_CELL	TYPE
 	C_CELL	SC_EXIT
