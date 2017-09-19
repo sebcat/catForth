@@ -36,10 +36,17 @@
 .set REG_W, rax
 .set REG_RSP, rbx
 
-/* Some sizes, and initial LFA which will be updated by DEFCODE, DEFWORD */
+/* word flags */
+.set F_HIDDEN,0x80
+.set F_IMMED,0x40
+.set F_MASK,0x1f
+
+/* Some sizes, and initial LFA which will be updated by DEFCODE, DEFWORD,
+ * DEFVAR */
 .set DATA_SEGMENT_SIZE, (1 << 20)
 .set RSTACK_SIZE, (1 << 20)
 .set CELLSIZE,8
+.set ALIGNMENT,4
 .set link, 0
 
 /* syscall numbers */
@@ -74,11 +81,13 @@
 
 /* define a low-level, "code" word */
 .macro DEFCODE name,namelen,label,flags=0
+	.align ALIGNMENT
 LFA_\label:
 	C_CELL	link
 	.set	link, LFA_\label
 	.byte	\flags | \namelen
 	.ascii	"\name"
+	.align ALIGNMENT
 \label:
 	C_CELL	PFA_\label
 PFA_\label:
@@ -86,14 +95,26 @@ PFA_\label:
 
 /* define a high-level Forth word */
 .macro DEFWORD name,namelen,label,flags=0
+	.align ALIGNMENT
 LFA_\label:
 	C_CELL	link
 	.set	link, LFA_\label
 	.byte	\flags | \namelen
 	.ascii	"\name"
+	.align ALIGNMENT
 \label:
 	C_CELL	ENTER
 PFA_\label:
+.endm
+
+/* define a code word for variables used in the .S file */
+.macro DEFVAR name,namelen,label,flags=0,initial=0
+	DEFCODE	\name,\namelen,\label,\flags
+	movabs	r9, offset 1f
+	push	r9
+	NEXT
+1:
+	C_CELL	\initial
 .endm
 
 /* allocate the data segment and the return stack in .bss. A guard page (or
@@ -235,6 +256,14 @@ _RIBUF:
 	pop		r9
 	NEXT
 
+	/* ( x y -- y x ) */
+	DEFCODE "SWAP",4,SWAP
+	pop		r9
+	pop		rcx
+	push	r9
+	push	rcx
+	NEXT
+
 	DEFCODE	"BRANCH",6,BRANCH
 	add		REG_IP, [REG_IP]
 	NEXT
@@ -247,7 +276,7 @@ _RIBUF:
 	lodsq
 	NEXT
 
-	/* ( x1 x2 - flag ) */
+	/* ( x1 x2 -- flag ) */
 	DEFCODE	"=",1,EQUALS
 	pop		rcx
 	pop		r9
@@ -276,6 +305,14 @@ _RIBUF:
 	pop		rdi
 	pop		rcx
 	mov		[rdi], cl
+	NEXT
+
+	/* ( n n -- n ) */
+	DEFCODE	"ADD",3,ADD
+	pop		rdi
+	pop		rcx
+	add		rcx, rdi
+	push	rcx
 	NEXT
 
 	/* ( char addr -- addr+1 ) */
@@ -309,8 +346,15 @@ _RIBUF:
 	NEXT
 
 	/* ( -- x ) */
-	DEFCODE	"R@",2, R_FETCH
+	DEFCODE	"R@",2,R_FETCH
 	mov		rcx, [REG_RSP]
+	push	rcx
+	NEXT
+
+	/* ( addr -- x ) */
+	DEFCODE	"@",1,FETCH
+	pop		r9
+	mov		rcx, [r9]
 	push	rcx
 	NEXT
 
@@ -359,6 +403,69 @@ _RIBUF:
 	inc		rcx
 	push	rcx
 	NEXT
+
+	/* (nfa c-addr -- flag ) */
+	DEFCODE	"NFAMATCH",8,NFAMATCH
+	pop		rdi /* word c-addr */
+	pop		rax /* nfa (NB: clobbers REG_W/rax) */
+
+	/* check if the length fields are equal */
+	mov		dl, [rax]
+	mov		dh, [rdi]
+	xor		dh, dl
+	and		dh, F_MASK
+	jz		1f
+	xor		rdx, rdx
+	push	rdx
+	NEXT
+1:
+	movzx	rcx, byte ptr [rdi]
+	inc		rdi
+	inc		rax
+2:
+	jrcxz	3f
+	mov		dh, byte ptr [rdi]
+	cmp		dh, byte ptr [rax]
+	jnz		4f
+	inc		rdi
+	inc		rax
+	dec		rcx
+	jnz		2b
+3:
+	/* NFA was a match */
+	xor		rdx, rdx
+	inc		rdx
+	push	rdx
+	NEXT
+4:
+	/* NFA was not a match */
+	xor		rdx, rdx
+	push	rdx
+	NEXT
+
+	/* ( lfa -- xt 1|-1) XXX: Does this need to be a code word? */
+	DEFCODE	"LFA_XTFY",8,LFA_XTFY
+	pop		rax
+	add		rax, CELLSIZE	/* LFA -> NFA */
+	mov		cl, [rax]		/* cl: len|flags */
+	mov		dl, 1
+	test	cl, F_IMMED
+	jnz		1f
+	mov		dl, -1			/* word is not immediate */
+1:
+	movsx	rdx, dl			/* rdx: immed */
+	and		cl, F_MASK
+	add		cl, ALIGNMENT - 1
+	movzx	rcx, cl
+	add		rax, rcx
+	and		rax, ~(ALIGNMENT - 1)
+	push	rax
+	push	rdx
+	NEXT
+
+	DEFCODE	"EXECUTE",7,EXECUTE
+	pop		rax
+	jmp		[rax]
 
 	DEFWORD "2OVER",5,TWO_OVER
 	C_CELL	OVER
@@ -421,6 +528,53 @@ _RIBUF:
 	C_CELL	wordbuf
 	C_CELL	EXIT
 
+	/* ( -- u ) */
+	DEFWORD	"CELL",4,CELL
+	C_CELL	LIT
+	C_CELL	CELLSIZE
+	C_CELL	EXIT
+
+	/* ( n -- n ) */
+	DEFWORD "CELL+",5,CELL_ADD
+	C_CELL	CELL
+	C_CELL	ADD
+	C_CELL	EXIT
+
+	/* ( c-addr -- c-addr 0  |  xt 1  |  xt -1 ) */
+	DEFWORD "FIND",4,FIND
+	C_CELL	TO_R
+	C_CELL	LATEST
+	C_CELL	FETCH
+1:
+	C_CELL	DUP
+	C_CELL	ZERO
+	C_CELL	EQUALS
+	C_CELL	ZBRANCH
+	C_CELL	2f-.
+	/* S: 0 R: c-addr */
+	C_CELL	R_FROM
+	C_CELL	SWAP
+	C_CELL	EXIT
+2:
+	C_CELL	DUP
+	C_CELL	CELL_ADD
+	C_CELL	R_FETCH
+	/* S: LFA NFA c-addr R: c-addr */
+	C_CELL	NFAMATCH
+	/* S: LFA 0|1 R: c-addr */
+	C_CELL	ZBRANCH
+	C_CELL	3f-.
+	C_CELL	R_FROM
+	C_CELL	DROP
+	C_CELL	LFA_XTFY /* LFA -> xt 1|-1 */
+	C_CELL	EXIT
+3:
+	/* advance LFA, check next entry */
+	C_CELL	FETCH
+	C_CELL	BRANCH
+	C_CELL	1b-.
+
+
 	/* ( c-addr - c-addr+1 u ) */
 	DEFWORD "COUNT",5,COUNT
 	C_CELL	C_FETCH_ADD
@@ -434,10 +588,11 @@ _RIBUF:
 	 * Right now it's used as an entry point for debugger oriented programming
      */
 	DEFWORD "QUIT",4,QUIT
-	C_CELL	LIT
-	C_CELL	15 /* exit code, for testing stack alignment at SC_EXIT */
 	C_CELL	catWORD
-	C_CELL	COUNT
-	C_CELL	TYPE
+	C_CELL	FIND
+	C_CELL	DROP
+	C_CELL	EXECUTE
 	C_CELL	SC_EXIT
 
+	/* should be the last entry in this file */
+	DEFVAR	"LATEST",6,LATEST,,LFA_LATEST
