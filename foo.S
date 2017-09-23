@@ -110,10 +110,10 @@ PFA_\label:
 /* define a code word for variables used in the .S file */
 .macro DEFVAR name,namelen,label,flags=0,initial=0
 	DEFCODE	\name,\namelen,\label,\flags
-	movabs	r9, offset 1f
+	movabs	r9, offset VAR_\label
 	push	r9
 	NEXT
-1:
+VAR_\label:
 	C_CELL	\initial
 .endm
 
@@ -385,6 +385,67 @@ _RIBUF:
 	pop		REG_W
 	NEXT
 
+	/* ( c-addr len -- n nleft ) */
+	DEFCODE "catNUMBER",9,catNUMBER
+	pop		r11			/* r11: len */
+	pop		rdi			/* rdi: c-addr */
+	xor		eax, eax	/* rax: number */
+	xor		r9d, r9d	/* r9: number negation flag */
+	test	r11, r11	/* zero len? */
+	jne		1f
+
+	/* string is zero length */
+	push	rax
+	push	rax
+	NEXT
+
+1:
+	/* negation check */
+	cmp		BYTE PTR [rdi], '-'
+	jne		2f
+	inc		rdi
+	dec		r11
+	mov		r9d, 0x1
+2:
+	mov		r10, QWORD PTR [VAR_BASE] /* r10: number base */
+	xor		r8d, r8d /* r8: c-addr offset */
+3:
+	cmp		r11, r8
+	je		6f /* jump to end if offset == len */
+	movzx	ecx, BYTE PTR [rdi+r8]
+	imul	rax, r10
+	lea		rdx, [rcx-'0']
+	cmp		rdx, 0x9
+	jbe		5f
+	lea		rdx, [rcx-'A']
+	cmp		rdx, 25
+	ja		4f
+	lea		rdx, [rcx-55] /* 'A'-55 = 10 */
+	jmp		5f
+4:
+	lea		rdx, [rcx-'a']
+	cmp		rdx, 25
+	ja		7f
+	lea		rdx, [rcx-87] /* 'a'-87 = 10 */
+5:
+	/* is current symbol >= base? If so, error out */
+	cmp		r10, rdx
+	jb		7f
+
+	add		rax, rdx
+	inc		r8
+	jmp		3b
+6:
+	mov		rdx, rax
+	neg		rdx
+	test	r9d, r9d
+	cmovne	rax, rdx
+7:
+	push	rax /* converted number */
+	sub		r11, r8
+	push	r11 /* number of bytes left (0 on success) */
+	NEXT
+
 	/* ( c -- flag ) */
 	DEFCODE "WS?",3,IS_WS
 	xor		rcx, rcx
@@ -589,10 +650,16 @@ _RIBUF:
      */
 	DEFWORD "QUIT",4,QUIT
 	C_CELL	catWORD
+	C_CELL	COUNT
+	C_CELL	catNUMBER
+	C_CELL	DROP
+	C_CELL	SC_EXIT
+/*
 	C_CELL	FIND
 	C_CELL	DROP
 	C_CELL	EXECUTE
 	C_CELL	SC_EXIT
-
+*/
+	DEFVAR	"BASE",4,BASE,,10
 	/* should be the last entry in this file */
 	DEFVAR	"LATEST",6,LATEST,,LFA_LATEST
