@@ -300,6 +300,13 @@ _RIBUF:
 	push	rdi
 	NEXT
 
+	/* ( n addr -- ) */
+	DEFCODE "!",1,STORE
+	pop		rdi
+	pop		rcx
+	mov		[rdi], rcx
+	NEXT
+
 	/* ( c addr -- ) */
 	DEFCODE "C!",2,C_STORE
 	pop		rdi
@@ -308,7 +315,7 @@ _RIBUF:
 	NEXT
 
 	/* ( n n -- n ) */
-	DEFCODE	"ADD",3,ADD
+	DEFCODE	"+",1,ADD
 	pop		rdi
 	pop		rcx
 	add		rcx, rdi
@@ -528,6 +535,24 @@ _RIBUF:
 	pop		rax
 	jmp		[rax]
 
+	/* ( n -- ) */
+	DEFWORD ",",1,COMMA
+	C_CELL	HERE
+	C_CELL	FETCH
+	C_CELL	STORE
+	C_CELL	HERE
+	C_CELL	FETCH
+	C_CELL	CELL_ADD
+	C_CELL	HERE
+	C_CELL	STORE
+	C_CELL	EXIT
+
+	DEFWORD	"1=",2,ONE_EQUALS
+	C_CELL	LIT
+	C_CELL	1
+	C_CELL	EQUALS
+	C_CELL	EXIT
+
 	DEFWORD "2OVER",5,TWO_OVER
 	C_CELL	OVER
 	C_CELL	OVER
@@ -645,21 +670,74 @@ _RIBUF:
 	C_CELL	ZERO
 	C_CELL	SC_EXIT
 
+	DEFWORD "INTERPRET",9,INTERPRET
+	C_CELL	catWORD
+	C_CELL	FIND
+	C_CELL	DUP
+	C_CELL	ZBRANCH /* branch if word not found (should be number) */
+	C_CELL	1f-.
+	C_CELL	ONE_EQUALS
+	C_CELL	ZBRANCH	/* branch if non-immediate */
+	C_CELL	4f-.
+	C_CELL	EXECUTE /* immediate - execute it */
+	C_CELL	EXIT
+
+	/* Word not found, should be a number */
+1:
+	C_CELL	DROP
+	C_CELL	COUNT
+	C_CELL	catNUMBER
+	C_CELL	ZBRANCH
+	C_CELL	2f-.
+	/* invalid number */
+	/* TODO: error instead of exiting */
+	C_CELL	BYE
+
+2:
+	/* valid number - which state are we in? */
+	C_CELL	STATE
+	C_CELL	FETCH
+	C_CELL	ZBRANCH
+	C_CELL	3f-.
+
+	/* number, state: compiling */
+	C_CELL	LIT
+	C_CELL	LIT
+	C_CELL	COMMA
+	C_CELL	COMMA
+	C_CELL	EXIT
+
+3:
+	/* number, state: interpreting. Just exit */
+	C_CELL	EXIT
+
+4:
+	/* execution token - which state are we in? */
+	C_CELL	STATE
+	C_CELL	FETCH
+	C_CELL	ZBRANCH
+	C_CELL	5f-.
+
+	/* xt, state: compiling */
+	C_CELL	COMMA
+	C_CELL	EXIT
+
+5:
+	/* xt, state: interpreting */
+	C_CELL	EXECUTE
+	C_CELL	EXIT
+
 	/* QUIT should reset the return stack and enter interpretation state.
 	 * Right now it's used as an entry point for debugger oriented programming
      */
 	DEFWORD "QUIT",4,QUIT
-	C_CELL	catWORD
-	C_CELL	COUNT
-	C_CELL	catNUMBER
-	C_CELL	DROP
-	C_CELL	SC_EXIT
-/*
-	C_CELL	FIND
-	C_CELL	DROP
-	C_CELL	EXECUTE
-	C_CELL	SC_EXIT
-*/
+1:
+	C_CELL	INTERPRET
+	C_CELL	BRANCH
+	C_CELL	1b-.
+
+	DEFVAR	"STATE",5,STATE,,0 /* 0 when interpreting */
 	DEFVAR	"BASE",4,BASE,,10
+	DEFVAR	"HERE",4,HERE,,DATA_SEGMENT
 	/* should be the last entry in this file */
 	DEFVAR	"LATEST",6,LATEST,,LFA_LATEST
