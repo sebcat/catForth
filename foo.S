@@ -523,7 +523,7 @@ _RIBUF:
 1:
     movsx   rdx, dl         /* rdx: immed */
     and     cl, F_MASK
-    add     cl, ALIGNMENT - 1
+    add     cl, ALIGNMENT   /* XXX: includes len byte adjustment */
     movzx   rcx, cl
     add     rax, rcx
     and     rax, ~(ALIGNMENT - 1)
