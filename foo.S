@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 Sebastian Cato
+ * Copyright (c) 2017-2018 Sebastian Cato
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -22,8 +22,6 @@
 
 /* ITC Forth for FreeBSD/amd64. Should be easy to adapt to 32-bit x86 or
  * Linux but no care is taken to do so.
- *
- * Tabs are assumed to be four spaces wide.
  */
 
 .intel_syntax noprefix
@@ -138,7 +136,6 @@ VAR_\label:
 _start:
     /* Setup the VM registers and start the interpreter. */
     cld
-    movabs      REG_RSP, offset RSTACK + RSTACK_SIZE
     movabs      REG_IP, offset PFA_QUIT
     NEXT
 
@@ -203,6 +200,10 @@ _RIBUF:
     pop     REG_IP
     pop     REG_W
     ret
+
+    DEFCODE "0RSP",4,ZERORSP
+    movabs      REG_RSP, offset RSTACK + RSTACK_SIZE
+    NEXT
 
     DEFCODE "EXIT",4,EXIT
     POPRSP  REG_IP
@@ -731,6 +732,7 @@ _RIBUF:
      * Right now it's used as an entry point for debugger oriented programming
      */
     DEFWORD "QUIT",4,QUIT
+    C_CELL  ZERORSP
 1:
     C_CELL  INTERPRET
     C_CELL  BRANCH
